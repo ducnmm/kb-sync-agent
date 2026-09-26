@@ -66,31 +66,44 @@ def run_pipeline(limit: int = ARTICLES_LIMIT, run_sanity: bool = True) -> int:
     print(f"  • Skipped: {len(skipped)}")
     print("--------------------------------------------------\n")
 
-    articles_to_upload = added + updated
+    hashed_articles = added + updated + skipped
 
     # --- STEP 3: Programmatic Vector Store Upload ---
-    logger.info(f"[Step 3/4] Uploading delta articles to Vector Store via API...")
+    # Reconcile every scraped article. Unchanged remote copies are not re-uploaded.
+    logger.info("[Step 3/4] Reconciling articles with the Vector Store via API...")
     client = get_openai_client()
-    vs_id, files_embedded, chunks_embedded = upload_files_to_vector_store(
-        articles=articles_to_upload,
-        client=client,
-    )
+    try:
+        vs_id, files_embedded, chunks_embedded, file_ids = upload_files_to_vector_store(
+            articles=hashed_articles,
+            client=client,
+        )
+    except Exception as exc:
+        logger.error(f"Vector Store upload failed: {exc}")
+        return 1
+
+    missing_ids = [str(art["id"]) for art in hashed_articles if str(art["id"]) not in file_ids]
+    if missing_ids:
+        logger.error(f"Vector Store is missing file ids for articles: {', '.join(missing_ids)}")
+        return 1
 
     print("\n--------------------------------------------------")
-    print(f"VECTOR STORE INGESTION REPORT:")
+    print("VECTOR STORE INGESTION REPORT:")
     print(f"  • Vector Store ID: {vs_id}")
     print(f"  • Files Embedded:  {files_embedded}")
     print(f"  • Chunks Embedded: {chunks_embedded}")
+    print(f"  • Files In Store:  {len(file_ids)}")
     print("--------------------------------------------------\n")
 
-    # Update state file
-    new_state = update_sync_state_records(current_state, articles_to_upload)
+    new_state = update_sync_state_records(current_state, hashed_articles, file_ids)
     save_sync_state(new_state)
 
     # --- STEP 4: OptiBot Sanity Check ---
     if run_sanity:
         logger.info(f"[Step 4/4] Executing sanity check prompt: '{SANITY_PROMPT}'...")
         bot_result = ask_optibot(query=SANITY_PROMPT, vector_store_id=vs_id, client=client)
+        if not bot_result["validation"]["has_support_url"]:
+            logger.warning("Sanity answer had no support citation. Retrying once.")
+            bot_result = ask_optibot(query=SANITY_PROMPT, vector_store_id=vs_id, client=client)
 
         print("\n==================================================")
         print("OPTIBOT VERIFICATION PROOF")
@@ -103,6 +116,22 @@ def run_pipeline(limit: int = ARTICLES_LIMIT, run_sanity: bool = True) -> int:
         print(f"  • Citations Count: {bot_result['validation']['citations_count']} (<= 3: {bot_result['validation']['citations_ok']})")
         print(f"  • Has Support Doc: {bot_result['validation']['has_support_url']}")
         print("==================================================\n")
+
+        if not bot_result["validation"]["has_support_url"]:
+            logger.error("Sanity check failed: answer did not cite a support article.")
+            return 1
+        if not bot_result["validation"]["bullets_ok"]:
+            logger.warning(
+                "Answer cites the docs but uses %s bullet markers. The verbatim prompt asks for 5 or fewer.",
+                bot_result["validation"]["bullet_count"],
+            )
+
+        proof_path = Path(__file__).resolve().parent / "docs" / "sanity-youtube.txt"
+        proof_path.parent.mkdir(parents=True, exist_ok=True)
+        proof_path.write_text(
+            f"Query: {bot_result['query']}\n\n{bot_result['response']}\n",
+            encoding="utf-8",
+        )
 
     logger.info("Pipeline execution completed successfully (Exit Code 0).")
     return 0

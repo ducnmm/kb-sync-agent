@@ -33,6 +33,7 @@ def ask_optibot(
         model=model,
         instructions=SYSTEM_PROMPT,
         input=query,
+        temperature=0.2,
         tools=[{
             "type": "file_search",
             "vector_store_ids": [vector_store_id],
@@ -57,22 +58,29 @@ def validate_optibot_response(response_text: str) -> Dict[str, Any]:
     1. Max 5 bullet points.
     2. Cites up to 3 'Article URL:' lines per reply.
     """
-    # Count bullet points (- , * , 1. , etc.)
+    # Top-level bullets only. Nested examples under one step are still bullets,
+    # so indented markers count too: the prompt caps the whole reply at 5.
     bullet_matches = re.findall(r"^(?:\s*[-*•]|\s*\d+\.)\s+", response_text, re.MULTILINE)
     bullet_count = len(bullet_matches)
 
-    # Check for Article URL citations or links
-    has_article_url = "Article URL:" in response_text or bool(re.search(r"https?://support\.optisigns\.com/hc/", response_text))
-    url_citations = re.findall(r"(?:Article URL:\s*)?(https?://[^\s\)]+)", response_text)
+    cited_urls = []
+    for match in re.findall(
+        r"(?:Article URL:\s*)?(https?://support\.optisigns\.com/hc/\S+)",
+        response_text,
+    ):
+        url = match.rstrip(").,]>\"'")
+        if url not in cited_urls:
+            cited_urls.append(url)
+    has_article_url = bool(cited_urls)
 
-    is_compliant = (bullet_count <= 5) and (len(url_citations) <= 3)
+    is_compliant = (bullet_count <= 5) and (len(cited_urls) <= 3) and has_article_url
 
     return {
         "is_compliant": is_compliant,
         "bullet_count": bullet_count,
         "bullets_ok": bullet_count <= 5,
-        "citations_count": len(url_citations),
-        "citations_ok": len(url_citations) <= 3,
+        "citations_count": len(cited_urls),
+        "citations_ok": len(cited_urls) <= 3 and has_article_url,
         "has_support_url": has_article_url,
-        "detected_urls": url_citations[:3],
+        "detected_urls": cited_urls[:3],
     }

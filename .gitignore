@@ -6,3 +6,4 @@ __pycache__/
 data/articles/
 data/state/sync_state.json
 data/state/vector_store.json
+submission/

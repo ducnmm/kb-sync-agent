@@ -45,7 +45,7 @@ This plan details the technical architecture, team structure, milestone breakdow
 |                                                                                   |
 |  +-----------------------------------------------------------------------------+  |
 |  | Common Core: TypeScript/Web Components Player Engine                        |  |
-|  | Offline Cache (IndexedDB / SQLite) | Local Cron Scheduler | Telemetry Engine |  |
+|  | Device cache for downloaded files | Local scheduler | Skip live apps offline |  |
 |  +-----------------------------------------------------------------------------+  |
 |         |                           |                               |             |
 |  +---------------+          +---------------+               +---------------+     |
@@ -81,26 +81,26 @@ This plan details the technical architecture, team structure, milestone breakdow
 > **MANDATORY SPECIFICATION REQUIREMENT**:  
 > *"Somewhere in the document, tell us one thing you found in the product that you did not expect, and what it changed in your plan."*
 
-### The Discovery: Offline Pre-Staging & Atomic Playlist Swapping
-During hands-on exploration of `app.optisigns.com` and testing screen pairing behavior, I expected the player to behave like a standard rich media streaming client: when a playlist changes or a schedule triggers, the player requests media URLs on-demand from the CDN over the active network connection.
+### The Discovery: Cached files keep playing, and the offline state is hidden by default
+I expected a lost connection to stop the screen or show a reconnecting error. OptiSigns documents the opposite in [What happens if the internet connection is lost?](https://support.optisigns.com/hc/en-us/articles/360016376793-What-happen-if-internet-connection-is-lost) and [Show/Hide Offline Indicator](https://support.optisigns.com/hc/en-us/articles/12947820509971-Show-Hide-Offline-Indicator-on-your-Player):
 
-However, observing player network tabs and inspecting edge disconnection behavior revealed a critical reality: **OptiSigns players operate on an aggressive Offline-First Pre-Staging Model**. 
-1. When a new playlist or scheduled item is deployed, the player **does not switch immediately**.
-2. It silently downloads the entire bundle of assets (videos, images, font files, and HTML widget bundles) into local storage (IndexedDB/CacheStorage for Web, Local Flash for Android) and performs a checksum verification.
-3. Only when 100% of the media assets are confirmed verified locally does the player atomically flip the active playback pointer.
-4. If internet connectivity drops entirely for hours or days, the screen continues its precise multi-zone scheduled playback loop without dropping a single frame or ever exposing a "Network Error / Reconnecting" screen to retail customers.
+1. Pictures, videos, and documents are downloaded to the device. Playback of that cached content continues with no internet.
+2. Live apps (YouTube, Vimeo, social feeds, dashboards) are skipped while the device is offline. They are not cached.
+3. Portal edits made during the outage are held and applied after the player reconnects.
+4. The offline indicator is off by default. Turning it on still waits about one minute, so a short blip does not flash a warning on a store screen.
+
+A BrightSign troubleshooting note makes the storage consequence concrete: the player cache (`localStorage` on the SD card) can grow until the card is full and apps stop updating. That is a disk-management problem, not a streaming problem.
 
 ### Architectural & Planning Pivot:
-* **Initial Plan Assumption**: The Player Agent was budgeted as a straightforward React SPA iframe wrapper streaming assets directly from CDN URLs, estimated at **4 weeks** in Phase 2.
-* **Impact of the Discovery**:
-  1. **Architecture Pivot**: The Player Core cannot be a thin streaming web view. It requires:
-     - An **Offline Asset Cache Manager** with persistent chunked downloading and SHA-256 integrity verification.
-     - A **Local Time-Engine**: A standalone edge scheduling state machine that evaluates cron rules against the device's local clock rather than relying on server timing.
-     - An **Atomic Surface Swap**: Dual-buffer rendering (Background Canvas pre-warms video decode while Foreground Canvas plays) to guarantee zero-gap transitions.
-  2. **Roadmap & Resource Impact**:
-     - Increased Player Core effort from **4 weeks to 7 weeks**.
-     - Elevated Player Core development to the **Critical Path** alongside the Backend API starting in Milestone 1.
-     - Deprioritized complex cloud transitions and social media app integrations in MVP to guarantee **100% offline playback resilience**.
+* **Initial plan assumption**: the player is a thin web view that streams asset URLs from the CDN. Budgeted at **4 weeks** in Phase 2.
+* **What changed**:
+  1. The player has two content classes. Downloadable files go to a device cache and keep playing offline. Live apps are marked non-cacheable and are skipped, not failed, when the network is down.
+  2. The schedule has to keep running on the device clock. A portal publish during an outage is a delta applied on reconnect, not a reason to blank the screen.
+  3. The offline badge is an opt-in screen setting with a one-minute delay. It is not the default failure UI.
+  4. Cache eviction is in the MVP. Cheap players run out of local disk (the BrightSign card-full case).
+* **Roadmap impact**:
+  * Player core moves from **4 weeks to 7 weeks** and starts on the critical path in Milestone 1, next to the API.
+  * Native social and dashboard apps stay out of the MVP. A live app that cannot play offline is a known skip, not a blocker for the cacheable menu-board path.
 
 ---
 
@@ -121,7 +121,7 @@ Month 2-3: Phase 2 - Scheduling Engine & Offline Player (Weeks 7-14)
 • Canvas Multi-Zone Layout Editor (Split-screen 2x2, 1x3, PIP)
 • Playlist Sequencer (Durations, transitions, loop logic)
 • Advanced Calendar Scheduling (Recurring rules, dayparting, priority overrides)
-• Offline-First Edge Player Core (IndexedDB, pre-fetch worker, atomic swap)
+• Offline player: cache pictures/videos/documents, skip live apps, opt-in offline indicator
 
 Month 4-5: Phase 3 - Fleet Telemetry & Multi-Platform Runtime (Weeks 15-20)
 ===========================================================================
@@ -142,7 +142,7 @@ Month 6: Phase 4 - Enterprise Hardening & Launch (Weeks 21-24)
 | Phase | Milestone Name | Scope Highlights | Duration | Dependencies |
 | :--- | :--- | :--- | :--- | :--- |
 | **M1** | Core CMS & Pairing Handshake | Auth, Tenant DB, S3 uploads, 6-digit PIN screen pairing | 6 Weeks | None |
-| **M2** | Playlist, Schedule & Offline Player | Multi-zone layout, offline pre-fetch cache, local scheduler | 8 Weeks | M1 |
+| **M2** | Playlist, Schedule & Offline Player | Multi-zone layout, device cache for files, skip live apps offline, local scheduler | 8 Weeks | M1 |
 | **M3** | Fleet Ops & Native Runtimes | MQTT live commands, screenshot capture, Android APK | 6 Weeks | M2 |
 | **M4** | Enterprise Scale & Launch | Load test 10k players, chaos resilience, security hardening | 4 Weeks | M3 |
 | **Total** | **Production MVP Launch** | **Full feature parity for Core SCIO Platform** | **24 Weeks** | — |
@@ -161,7 +161,7 @@ An agile engineering unit of **6 full-time engineers** is optimal for high veloc
   - Frontend 1: Web Portal UI, responsive dashboard, device management tables.
   - Frontend 2: Multi-zone visual canvas layout editor & playlist sequencer.
 * **1x Edge / Player Specialist (TypeScript / Android / Embedded Web)**:
-  - Offline cache manager, dual-buffer video compositor, Android/FireOS APK wrapper.
+  - Device cache, live-vs-file playback rules, Android/FireOS APK wrapper.
 
 ---
 
@@ -173,7 +173,7 @@ An agile engineering unit of **6 full-time engineers** is optimal for high veloc
 - Asset library with automated transcoding for MP4, PNG, JPG, WebP.
 - Multi-zone layout designer (fullscreen, 2-zone, 3-zone split).
 - Dayparting & recurring scheduling engine (e.g. Breakfast Menu: 06:00–10:30, Lunch: 10:30–14:00).
-- Offline-first playback engine with background asset verification.
+- Offline playback for downloaded pictures, videos, and documents. Live apps are skipped while offline. Offline indicator is opt-in.
 - Real-time device status (Online, Offline, In Sync) and live screenshot capture via MQTT.
 - Core hardware support: Web Player (PWA) + Android TV / Fire TV Stick (APK).
 
