@@ -6,6 +6,11 @@ on:
     - cron: '0 0 * * *'
   workflow_dispatch: # Allows manual trigger from GitHub UI
 
+# One run at a time. A second trigger waits, so two jobs cannot delete the same file.
+concurrency:
+  group: daily-kb-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     name: Sync Knowledge Base & Sanity Check
@@ -24,7 +29,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
       - name: Run Test Suite
         run: |

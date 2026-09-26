@@ -3,9 +3,10 @@
 import json
 import logging
 import os
+import time
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
-from openai import OpenAI
+from typing import Callable, List, Dict, Any, Tuple, TypeVar
+from openai import APIConnectionError, APIStatusError, OpenAI
 
 from src.config import (
     OPENAI_API_KEY,
@@ -17,6 +18,29 @@ from src.config import (
 from src.chunker import chunk_markdown
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+# 429 is the rate limit. 5xx is OpenAI being down. Both are worth a short wait.
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+def _call(action: Callable[[], T]) -> T:
+    """Run one OpenAI call. Back off when the API is rate-limiting or unavailable."""
+    delay = 1.0
+    for attempt in range(5):
+        try:
+            return action()
+        except APIConnectionError as exc:
+            if attempt == 4:
+                raise
+            logger.warning("OpenAI connection failed (%s). Retrying in %.0fs.", exc, delay)
+        except APIStatusError as exc:
+            if exc.status_code not in RETRYABLE_STATUS or attempt == 4:
+                raise
+            logger.warning("OpenAI returned %s. Retrying in %.0fs.", exc.status_code, delay)
+        time.sleep(delay)
+        delay = min(delay * 2, 16)
+    raise RuntimeError("OpenAI retry loop exited without a result")
 
 
 def get_openai_client() -> OpenAI:
@@ -125,7 +149,7 @@ def _list_remote_files(client: OpenAI, vector_store_id: str) -> List[Any]:
         kwargs: Dict[str, Any] = {"vector_store_id": vector_store_id, "limit": 100}
         if after:
             kwargs["after"] = after
-        page = client.vector_stores.files.list(**kwargs)
+        page = _call(lambda: client.vector_stores.files.list(**kwargs))
         remote.extend(page.data)
         if not page.has_more or not page.data:
             break
@@ -133,16 +157,17 @@ def _list_remote_files(client: OpenAI, vector_store_id: str) -> List[Any]:
     return remote
 
 
-def _index_remote_files(client: OpenAI, vector_store_id: str) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
-    """Index remote files by article_id attribute and by filename."""
-    by_article: Dict[str, Any] = {}
+def _index_remote_files(client: OpenAI, vector_store_id: str) -> Tuple[Dict[str, List[Any]], Dict[str, List[str]]]:
+    """Index remote files by article_id. Only files missing that attribute need a filename lookup."""
+    by_article: Dict[str, List[Any]] = {}
     by_name: Dict[str, List[str]] = {}
     for vs_file in _list_remote_files(client, vector_store_id):
         article_id = str((vs_file.attributes or {}).get("article_id") or "")
         if article_id:
-            by_article[article_id] = vs_file
+            by_article.setdefault(article_id, []).append(vs_file)
+            continue
         try:
-            meta = client.files.retrieve(vs_file.id)
+            meta = _call(lambda: client.files.retrieve(vs_file.id))
         except Exception as exc:
             logger.warning(f"Could not read file metadata for {vs_file.id}: {exc}")
             continue
@@ -154,11 +179,11 @@ def _index_remote_files(client: OpenAI, vector_store_id: str) -> Tuple[Dict[str,
 def _delete_remote_file(client: OpenAI, vector_store_id: str, file_id: str) -> None:
     """Detach a file from the vector store and delete the underlying file object."""
     try:
-        client.vector_stores.files.delete(file_id=file_id, vector_store_id=vector_store_id)
+        _call(lambda: client.vector_stores.files.delete(file_id=file_id, vector_store_id=vector_store_id))
     except Exception as exc:
         logger.warning(f"Could not detach {file_id} from {vector_store_id}: {exc}")
     try:
-        client.files.delete(file_id)
+        _call(lambda: client.files.delete(file_id))
     except Exception as exc:
         logger.warning(f"Could not delete file object {file_id}: {exc}")
 
@@ -193,21 +218,29 @@ def upload_files_to_vector_store(
             raise FileNotFoundError(f"Markdown file missing for article {art_id}: {path}")
 
         digest = art.get("hash") or ""
-        remote = by_article.get(art_id)
-        remote_hash = str((remote.attributes or {}).get("content_hash") or "") if remote else ""
-        if remote and digest and remote_hash == digest:
-            id_map[art_id] = remote.id
+        group = by_article.get(art_id, [])
+        match = next(
+            (
+                remote
+                for remote in group
+                if digest and str((remote.attributes or {}).get("content_hash") or "") == digest
+            ),
+            None,
+        )
+        if match:
+            id_map[art_id] = match.id
+            # A good copy is already in the store. Extra copies are safe to drop.
+            for remote in group:
+                if remote.id != match.id:
+                    logger.info(f"Removing duplicate {remote.id} for article {art_id}")
+                    _delete_remote_file(client, vs_id, remote.id)
             continue
 
-        stale_ids = []
-        if remote:
-            stale_ids.append(remote.id)
+        # Keep the old ids until the new batch has completed.
+        stale_ids = [remote.id for remote in group]
         for file_id in by_name.get(path.name, []):
             if file_id not in stale_ids:
                 stale_ids.append(file_id)
-        for file_id in stale_ids:
-            logger.info(f"Replacing stale vector store file {file_id} for article {art_id}")
-            _delete_remote_file(client, vs_id, file_id)
 
         text = path.read_text(encoding="utf-8")
         chunks = chunk_markdown(
@@ -221,6 +254,7 @@ def upload_files_to_vector_store(
             "hash": digest,
             "title": (art.get("title") or path.stem)[:200],
             "chunks": len(chunks),
+            "stale_ids": stale_ids,
         })
 
     if not pending:
@@ -235,44 +269,60 @@ def upload_files_to_vector_store(
     created: List[Dict[str, Any]] = []
     try:
         for item in pending:
-            with item["path"].open("rb") as handle:
-                uploaded = client.files.create(file=(item["path"].name, handle), purpose="assistants")
+            path = item["path"]
+
+            def send_file(path=path):
+                # Re-open on every attempt. A retry must not send a stream already read to the end.
+                with path.open("rb") as handle:
+                    return client.files.create(file=(path.name, handle), purpose="assistants")
+
+            uploaded = _call(send_file)
             created.append({**item, "file_id": uploaded.id})
     except Exception:
         for item in created:
-            try:
-                client.files.delete(item["file_id"])
-            except Exception as exc:
-                logger.warning(f"Could not roll back file {item['file_id']}: {exc}")
+            _delete_remote_file(client, vs_id, item["file_id"])
         raise
 
-    batch = client.vector_stores.file_batches.create_and_poll(
-        vector_store_id=vs_id,
-        files=[
-            {
-                "file_id": item["file_id"],
-                "attributes": {
-                    "article_id": item["id"],
-                    "content_hash": item["hash"],
-                    "title": item["title"],
-                },
-                "chunking_strategy": CHUNKING_STRATEGY,
-            }
-            for item in created
-        ],
-        poll_interval_ms=1000,
-    )
+    try:
+        batch = _call(
+            lambda: client.vector_stores.file_batches.create_and_poll(
+                vector_store_id=vs_id,
+                files=[
+                    {
+                        "file_id": item["file_id"],
+                        "attributes": {
+                            "article_id": item["id"],
+                            "content_hash": item["hash"],
+                            "title": item["title"],
+                        },
+                        "chunking_strategy": CHUNKING_STRATEGY,
+                    }
+                    for item in created
+                ],
+                poll_interval_ms=1000,
+            )
+        )
+    except Exception:
+        for item in created:
+            _delete_remote_file(client, vs_id, item["file_id"])
+        raise
     failed = int(getattr(batch.file_counts, "failed", 0) or 0)
     logger.info(f"Vector Store batch {batch.id} status={batch.status} file_counts={batch.file_counts}")
     if batch.status != "completed" or failed:
+        for item in created:
+            _delete_remote_file(client, vs_id, item["file_id"])
         raise RuntimeError(
             f"Vector store batch {batch.id} status={batch.status} failed_files={failed}"
         )
 
     for item in created:
         id_map[item["id"]] = item["file_id"]
+        for stale_id in item["stale_ids"]:
+            if stale_id != item["file_id"]:
+                logger.info(f"Removing replaced file {stale_id} for article {item['id']}")
+                _delete_remote_file(client, vs_id, stale_id)
 
     logger.info(
-        f"EXACT INGESTION COUNT: {len(created)} file(s) and {total_chunks} chunk(s) embedded into Vector Store {vs_id}."
+        f"Uploaded {len(created)} file(s). Local chunk estimate: {total_chunks}. Vector Store {vs_id}."
     )
     return vs_id, len(created), total_chunks, id_map
