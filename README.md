@@ -29,18 +29,15 @@ docker run --rm -e API_KEY=sk-... kb-sync-agent
 
 Chunking is static: 800 tokens, 100 overlap, set on each uploaded file. A short how-to fits in one chunk. The overlap keeps a step that lands on a boundary.
 
-First successful upload: **35 files, 138 chunks**. A later run against that store:
+First successful upload: **35 files, 138 chunks**.
 
-```text
-Added: 0    Updated: 0    Skipped: 35
-Files Embedded: 0    Files In Store: 35
-```
+A later run on a machine that already has state prints added 0, updated 0, skipped 35. A fresh machine has no state file, so the same articles show up as added. The upload still skips them when the store already has the same content hash. The public run did that: added 35, embedded 0, 35 files left in the store.
 
 ## Daily job
 
 GitHub Actions runs `python main.py` every day at 00:00 UTC.
 
-Workflow logs: https://github.com/ducnmm/kb-sync-agent/actions
+Log from the first public run: https://github.com/ducnmm/kb-sync-agent/actions/runs/36230221409
 
 ## Sample answer
 
