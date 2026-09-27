@@ -2,7 +2,7 @@
 
 import pytest
 from src.chunker import estimate_token_count, chunk_markdown
-from src.assistant import validate_optibot_response
+from src.assistant import shape_to_prompt, validate_optibot_response
 
 
 def test_estimate_token_count():
@@ -52,3 +52,23 @@ Article URL: https://support.optisigns.com/hc/en-us/articles/360051014713-How-to
     v2 = validate_optibot_response(bad_response)
     assert v2["bullets_ok"] is False
     assert v2["is_compliant"] is False
+
+
+def test_shape_to_prompt_drops_nested_bullets_and_writes_article_url():
+    raw = """
+1. Open Files/Assets and click Apps.
+2. Enter the link:
+   - Name is optional.
+   - URL is required.
+3. Save.
+
+See https://support.optisigns.com/hc/en-us/articles/360051014713-How-to-Use-YouTube-with-OptiSigns
+"""
+    shaped = shape_to_prompt(raw)
+    assert shaped.count("• ") == 3
+    assert "Name is optional" not in shaped
+    assert "Enter the link: URL is required." in shaped
+    assert shaped.strip().endswith(
+        "Article URL: https://support.optisigns.com/hc/en-us/articles/360051014713-How-to-Use-YouTube-with-OptiSigns"
+    )
+    assert validate_optibot_response(shaped)["is_compliant"] is True

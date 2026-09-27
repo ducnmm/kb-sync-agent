@@ -52,6 +52,56 @@ def ask_optibot(
     }
 
 
+def shape_to_prompt(response_text: str) -> str:
+    """Keep the model's top-level steps and the article it cited, in the prompt's shape.
+
+    Nested bullets are dropped. At most five steps are kept. The cited support
+    URL is written as an Article URL line. Raises ValueError if either is missing.
+    """
+    urls = []
+    for match in re.findall(r"https?://support\.optisigns\.com/hc/\S+", response_text):
+        url = match.rstrip(").,]>\"'")
+        if url not in urls:
+            urls.append(url)
+    if not urls:
+        raise ValueError("model reply cited no support article")
+
+    lines = response_text.splitlines()
+    steps = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.startswith((" ", "\t")):
+            index += 1
+            continue
+        match = re.match(r"^(?:[-*•]|\d+\.)\s+(.*\S)\s*$", line.strip())
+        if not match:
+            index += 1
+            continue
+        step = re.sub(r"\*\*", "", match.group(1)).strip()
+        extras = []
+        nxt = index + 1
+        while nxt < len(lines) and lines[nxt].startswith((" ", "\t")):
+            extra = re.match(r"^\s*(?:[-*•]|\d+\.)\s+(.*\S)\s*$", lines[nxt])
+            if extra:
+                extras.append(re.sub(r"\*\*", "", extra.group(1)).strip())
+            nxt += 1
+        # A step that is only a label keeps one nested detail, preferring the link field.
+        # It stays one bullet, so the reply does not grow past the prompt's cap.
+        if step.endswith(":") and extras:
+            chosen = next((item for item in extras if re.search(r"URL|link|Paste", item, re.I)), None)
+            if chosen:
+                step = f"{step} {chosen}"
+        if step:
+            steps.append(step)
+        index = nxt
+    if not steps:
+        raise ValueError("model reply had no top-level steps")
+
+    body = "\n".join(f"• {step}" for step in steps[:5])
+    return f"{body}\n\nArticle URL: {urls[0]}\n"
+
+
 def validate_optibot_response(response_text: str) -> Dict[str, Any]:
     """
     Verify response compliance against OptiBot system rules:

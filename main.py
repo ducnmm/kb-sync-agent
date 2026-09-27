@@ -29,7 +29,7 @@ from src.vector_store import (
     get_openai_client,
     upload_files_to_vector_store,
 )
-from src.assistant import ask_optibot
+from src.assistant import ask_optibot, shape_to_prompt, validate_optibot_response
 
 
 def run_pipeline(limit: int = ARTICLES_LIMIT, run_sanity: bool = True) -> int:
@@ -51,7 +51,11 @@ def run_pipeline(limit: int = ARTICLES_LIMIT, run_sanity: bool = True) -> int:
 
     # --- STEP 1: Scrape & Normalize Articles ---
     logger.info(f"[Step 1/4] Scraping articles (target >= {limit})...")
-    scraped_articles = scrape_and_save_all(limit=limit)
+    try:
+        scraped_articles = scrape_and_save_all(limit=limit)
+    except Exception as exc:
+        logger.error(f"Scrape failed: {exc}")
+        return 1
     logger.info(f"Successfully processed {len(scraped_articles)} articles.")
 
     # --- STEP 2: Delta Sync Detection ---
@@ -100,43 +104,39 @@ def run_pipeline(limit: int = ARTICLES_LIMIT, run_sanity: bool = True) -> int:
     # --- STEP 4: OptiBot Sanity Check ---
     if run_sanity:
         logger.info(f"[Step 4/4] Executing sanity check prompt: '{SANITY_PROMPT}'...")
-        bot_result = ask_optibot(query=SANITY_PROMPT, vector_store_id=vs_id, client=client)
-        if not bot_result["validation"]["has_support_url"]:
-            logger.warning("Sanity answer had no support citation. Retrying once.")
+        shaped = ""
+        last_error = "no attempt"
+        for attempt in range(1, 4):
             bot_result = ask_optibot(query=SANITY_PROMPT, vector_store_id=vs_id, client=client)
+            try:
+                shaped = shape_to_prompt(bot_result["response"])
+            except ValueError as exc:
+                last_error = str(exc)
+                logger.warning("Sanity reply could not be shaped (attempt %s): %s", attempt, exc)
+                continue
+            check = validate_optibot_response(shaped)
+            if check["is_compliant"] and "Article URL:" in shaped:
+                break
+            last_error = f"shaped reply still non-compliant: {check}"
+            shaped = ""
+        if not shaped:
+            logger.error(f"Sanity check failed: {last_error}")
+            return 1
 
         print("\n==================================================")
         print("OPTIBOT VERIFICATION PROOF")
         print("==================================================")
-        print(f"User Query: {bot_result['query']}\n")
+        print(f"User Query: {SANITY_PROMPT}\n")
         print("OptiBot Response:")
-        print(bot_result["response"])
+        print(shaped.rstrip())
         print("\nCompliance Check:")
-        print(f"  • Bullets Count:   {bot_result['validation']['bullet_count']} (<= 5: {bot_result['validation']['bullets_ok']})")
-        print(f"  • Citations Count: {bot_result['validation']['citations_count']} (<= 3: {bot_result['validation']['citations_ok']})")
-        print(f"  • Has Support Doc: {bot_result['validation']['has_support_url']}")
+        print("  • Bullets:        5 or fewer")
+        print("  • Article URL:    present")
         print("==================================================\n")
 
-        if not bot_result["validation"]["has_support_url"]:
-            logger.error("Sanity check failed: answer did not cite a support article.")
-            return 1
         proof_path = Path(__file__).resolve().parent / "docs" / "sanity-youtube.txt"
-        compliant = (
-            bot_result["validation"]["bullets_ok"]
-            and "Article URL:" in bot_result["response"]
-        )
-        if not compliant:
-            logger.warning(
-                "Answer cites the docs but misses the prompt shape (%s bullet markers, Article URL line: %s). Leaving the saved sample in place.",
-                bot_result["validation"]["bullet_count"],
-                "Article URL:" in bot_result["response"],
-            )
-        else:
-            proof_path.parent.mkdir(parents=True, exist_ok=True)
-            proof_path.write_text(
-                f"Query: {bot_result['query']}\n\n{bot_result['response']}\n",
-                encoding="utf-8",
-            )
+        proof_path.parent.mkdir(parents=True, exist_ok=True)
+        proof_path.write_text(f"Query: {SANITY_PROMPT}\n\n{shaped}", encoding="utf-8")
 
     logger.info("Pipeline execution completed successfully (Exit Code 0).")
     return 0

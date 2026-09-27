@@ -155,9 +155,20 @@ def save_article_as_markdown(article: Dict[str, Any], output_dir: Path = ARTICLE
     }
 
 
+def ensure_article_count(articles: List[Dict[str, Any]], limit: int) -> None:
+    """Refuse a short scrape. The brief asks for at least `limit` articles."""
+    if len(articles) < limit:
+        raise RuntimeError(f"Need at least {limit} articles, got {len(articles)}")
+    found = {article.get("id") for article in articles}
+    missing = [article_id for article_id in ESSENTIAL_ARTICLE_IDS if article_id not in found]
+    if missing:
+        raise RuntimeError(f"Missing required articles: {missing}")
+
+
 def scrape_and_save_all(limit: int = ARTICLES_LIMIT) -> List[Dict[str, Any]]:
     """End-to-end scraper execution: fetches, normalizes, and saves Markdown articles."""
     articles = fetch_articles(limit=limit)
+    ensure_article_count(articles, limit)
     saved_metadata = []
     for art in articles:
         meta = save_article_as_markdown(art)

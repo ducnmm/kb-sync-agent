@@ -44,4 +44,4 @@ Latest scheduled run: https://github.com/ducnmm/kb-sync-agent/actions/runs/36293
 
 ![OptiBot answer to "How do I add a YouTube video?"](docs/sanity-youtube.png)
 
-Five bullets, then one `Article URL:` line, as the system prompt requires. The cited article is the YouTube how-to. The file-search replies name that same article, and they keep nesting extra bullets, so the saved sample is that answer held to the prompt's shape.
+The program keeps at most five of the model's top-level steps and writes the support article it cited as one `Article URL:` line. Nested bullets are dropped. A reply with no support article fails the run.

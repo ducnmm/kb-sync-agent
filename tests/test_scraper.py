@@ -1,7 +1,8 @@
 """Unit tests for scraper and markdown normalization."""
 
 import pytest
-from src.scraper import slugify, clean_html_to_markdown
+
+from src.scraper import ensure_article_count, slugify, clean_html_to_markdown
 
 
 def test_slugify():
@@ -42,3 +43,8 @@ def test_clean_html_to_markdown_preserves_lists_and_formatting():
     assert "### Steps to Configure" in md
     assert "Step 1: Open Settings" in md
     assert "`API_KEY`" in md
+
+
+def test_ensure_article_count_rejects_a_short_scrape():
+    with pytest.raises(RuntimeError, match="at least 30"):
+        ensure_article_count([{"id": 1}], 30)
