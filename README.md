@@ -38,7 +38,7 @@ A later run on a machine that already has state prints added 0, updated 0, skipp
 
 GitHub Actions runs `python main.py` every day at 00:00 UTC.
 
-Latest scheduled run: https://github.com/ducnmm/kb-sync-agent/actions/runs/36293006405
+Latest run of this pipeline: https://github.com/ducnmm/kb-sync-agent/actions/runs/36359689930
 
 ## Sample answer
 
