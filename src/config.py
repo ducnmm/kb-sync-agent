@@ -25,7 +25,6 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
 
 # Scraper Settings
 ZENDESK_API_URL = "https://support.optisigns.com/api/v2/help_center/en-us/articles.json"
-ZENDESK_SEARCH_URL = "https://support.optisigns.com/api/v2/help_center/articles/search.json"
 ARTICLES_LIMIT = int(os.getenv("ARTICLES_LIMIT", "35"))
 
 # Chunking Strategy Configuration

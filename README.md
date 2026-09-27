@@ -30,7 +30,7 @@ docker run --rm -e API_KEY=sk-... kb-sync-agent
 
 Chunking is static: 800 tokens, 100 overlap, set on each uploaded file. A short how-to fits in one chunk. The overlap keeps a step that lands on a boundary.
 
-First successful upload: **35 files**, about **138 chunks** by the local estimate. OpenAI chunks the file itself with the same 800/100 settings.
+First successful upload: **35 files**, about **138 chunks** by the local estimate. OpenAI chunks each file itself with the same 800/100 settings. Every run also prints that local estimate for all scraped files, plus the remote store's completed file count, even when this run embeds nothing.
 
 A later run on a machine that already has state prints added 0, updated 0, skipped 35. A fresh machine has no state file, so the same articles show up as added. The upload still skips them when the store already has the same content hash. The public run did that: added 35, embedded 0, 35 files left in the store.
 

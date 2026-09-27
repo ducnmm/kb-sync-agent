@@ -15,6 +15,8 @@ logger = logging.getLogger("main")
 
 from src.config import (
     ARTICLES_LIMIT,
+    CHUNK_OVERLAP_TOKENS,
+    CHUNK_SIZE_TOKENS,
     SANITY_PROMPT,
     OPENAI_API_KEY,
 )
@@ -25,6 +27,7 @@ from src.delta_sync import (
     detect_delta,
     update_sync_state_records,
 )
+from src.chunker import chunk_markdown
 from src.vector_store import (
     get_openai_client,
     upload_files_to_vector_store,
@@ -90,12 +93,30 @@ def run_pipeline(limit: int = ARTICLES_LIMIT, run_sanity: bool = True) -> int:
         logger.error(f"Vector Store is missing file ids for articles: {', '.join(missing_ids)}")
         return 1
 
+    local_chunks = 0
+    for art in hashed_articles:
+        text = Path(art["file_path"]).read_text(encoding="utf-8")
+        local_chunks += len(chunk_markdown(
+            text,
+            max_chunk_tokens=CHUNK_SIZE_TOKENS,
+            overlap_tokens=CHUNK_OVERLAP_TOKENS,
+        ))
+    remote_completed = None
+    try:
+        remote = client.vector_stores.retrieve(vs_id)
+        remote_completed = getattr(getattr(remote, "file_counts", None), "completed", None)
+    except Exception as exc:
+        logger.warning(f"Could not read vector store file counts: {exc}")
+
     print("\n--------------------------------------------------")
     print("VECTOR STORE INGESTION REPORT:")
-    print(f"  • Vector Store ID: {vs_id}")
-    print(f"  • Files Embedded:  {files_embedded}")
-    print(f"  • Chunks Embedded: {chunks_embedded}")
-    print(f"  • Files In Store:  {len(file_ids)}")
+    print(f"  • Vector Store ID:        {vs_id}")
+    print(f"  • Files Embedded:         {files_embedded}")
+    print(f"  • Chunks Embedded:        {chunks_embedded}")
+    print(f"  • Local chunk estimate:   {local_chunks} (all {len(hashed_articles)} scraped files, 800/100)")
+    print(f"  • Files In Store:         {len(file_ids)}")
+    if remote_completed is not None:
+        print(f"  • Remote files completed: {remote_completed}")
     print("--------------------------------------------------\n")
 
     new_state = update_sync_state_records(current_state, hashed_articles, file_ids)
@@ -123,15 +144,22 @@ def run_pipeline(limit: int = ARTICLES_LIMIT, run_sanity: bool = True) -> int:
             logger.error(f"Sanity check failed: {last_error}")
             return 1
 
+        raw_check = validate_optibot_response(bot_result["response"])
+        shaped_check = validate_optibot_response(shaped)
         print("\n==================================================")
         print("OPTIBOT VERIFICATION PROOF")
         print("==================================================")
         print(f"User Query: {SANITY_PROMPT}\n")
-        print("OptiBot Response:")
+        print("Model reply, unchanged:")
+        print(bot_result["response"].rstrip())
+        print("\nRaw compliance:")
+        print(f"  • Bullets:     {raw_check['bullet_count']} (<= 5: {raw_check['bullets_ok']})")
+        print(f"  • Citations:   {raw_check['citations_count']} (<= 3: {raw_check['citations_ok']})")
+        print(f"  • Support URL: {raw_check['has_support_url']}")
+        print("\nReply held to the prompt (at most 5 top-level steps, one Article URL line):")
         print(shaped.rstrip())
-        print("\nCompliance Check:")
-        print("  • Bullets:        5 or fewer")
-        print("  • Article URL:    present")
+        print("\nShaped compliance:")
+        print(f"  • Passes: {shaped_check['is_compliant']}")
         print("==================================================\n")
 
         proof_path = Path(__file__).resolve().parent / "docs" / "sanity-youtube.txt"

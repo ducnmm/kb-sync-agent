@@ -11,7 +11,6 @@ from markdownify import markdownify as md
 
 from src.config import (
     ZENDESK_API_URL,
-    ZENDESK_SEARCH_URL,
     ARTICLES_LIMIT,
     ARTICLES_DIR,
 )
@@ -137,7 +136,8 @@ def save_article_as_markdown(article: Dict[str, Any], output_dir: Path = ARTICLE
     body_html = article.get("body", "")
 
     slug = slugify(title)
-    filename = f"{slug}.md"
+    # The id keeps two articles with the same title from writing one file.
+    filename = f"{slug}-{article['id']}.md"
     file_path = output_dir / filename
 
     content_md = clean_html_to_markdown(body_html, title, html_url)
