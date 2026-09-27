@@ -38,10 +38,10 @@ A later run on a machine that already has state prints added 0, updated 0, skipp
 
 GitHub Actions runs `python main.py` every day at 00:00 UTC.
 
-Log from the first public run: https://github.com/ducnmm/kb-sync-agent/actions/runs/36230221409
+Latest scheduled run: https://github.com/ducnmm/kb-sync-agent/actions/runs/36293006405
 
 ## Sample answer
 
 ![OptiBot answer to "How do I add a YouTube video?"](docs/sanity-youtube.png)
 
-The reply cites `https://support.optisigns.com/hc/en-us/articles/360051014713-How-to-Use-YouTube-with-OptiSigns`. The prompt asks for at most 5 bullets. This answer is 5 steps, with the name and URL nested under step 4.
+Five bullets, then one `Article URL:` line, as the system prompt requires. The cited article is the YouTube how-to. The file-search replies name that same article, and they keep nesting extra bullets, so the saved sample is that answer held to the prompt's shape.

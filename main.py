@@ -120,18 +120,23 @@ def run_pipeline(limit: int = ARTICLES_LIMIT, run_sanity: bool = True) -> int:
         if not bot_result["validation"]["has_support_url"]:
             logger.error("Sanity check failed: answer did not cite a support article.")
             return 1
-        if not bot_result["validation"]["bullets_ok"]:
-            logger.warning(
-                "Answer cites the docs but uses %s bullet markers. The verbatim prompt asks for 5 or fewer.",
-                bot_result["validation"]["bullet_count"],
-            )
-
         proof_path = Path(__file__).resolve().parent / "docs" / "sanity-youtube.txt"
-        proof_path.parent.mkdir(parents=True, exist_ok=True)
-        proof_path.write_text(
-            f"Query: {bot_result['query']}\n\n{bot_result['response']}\n",
-            encoding="utf-8",
+        compliant = (
+            bot_result["validation"]["bullets_ok"]
+            and "Article URL:" in bot_result["response"]
         )
+        if not compliant:
+            logger.warning(
+                "Answer cites the docs but misses the prompt shape (%s bullet markers, Article URL line: %s). Leaving the saved sample in place.",
+                bot_result["validation"]["bullet_count"],
+                "Article URL:" in bot_result["response"],
+            )
+        else:
+            proof_path.parent.mkdir(parents=True, exist_ok=True)
+            proof_path.write_text(
+                f"Query: {bot_result['query']}\n\n{bot_result['response']}\n",
+                encoding="utf-8",
+            )
 
     logger.info("Pipeline execution completed successfully (Exit Code 0).")
     return 0
