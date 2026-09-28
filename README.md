@@ -23,7 +23,7 @@ docker run --rm -e API_KEY=sk-... kb-sync-agent
 
 ## What the job does
 
-1. Read articles from the Zendesk help-center API (at least 30) and save `<slug>.md`. Nav and scripts are dropped. Headings, links, and code stay. Each file starts with `Article URL:`.
+1. Read articles from the Zendesk help-center API (at least 30) and save `<slug>-<id>.md`. The id is in the name so two articles with the same title do not overwrite one file. Nav and scripts are dropped. Headings, links, and code stay. Each file starts with `Article URL:`.
 2. Compare SHA-256 of the file and Zendesk `updated_at` with the last run. Counts printed: added, updated, skipped.
 3. Upload the delta with the OpenAI vector-store file-batch API. Files already in the store with the same `content_hash` attribute are not sent again, including from a clean container. A rate limit waits and retries. The old copy is removed only after the new batch succeeds.
 4. Ask "How do I add a YouTube video?" with the file_search tool and the system prompt from the brief.
