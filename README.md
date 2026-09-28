@@ -42,6 +42,8 @@ Latest run of this pipeline: https://github.com/ducnmm/kb-sync-agent/actions/run
 
 ## Sample answer
 
-![OptiBot answer to "How do I add a YouTube video?"](docs/sanity-youtube.png)
+Asked in the OpenAI Playground, with file search on the vector store the script uploaded. The system prompt is the one in the brief. The reply is five bullets and one `Article URL:` line, and it cites `how-to-use-youtube-with-optisigns-360051014713.md`.
 
-The program keeps at most five of the model's top-level steps and writes the support article it cited as one `Article URL:` line. Nested bullets are dropped. A reply with no support article fails the run.
+![Playground answer to "How do I add a YouTube video?"](docs/sanity-youtube-playground.png)
+
+The daily job prints the model's raw reply, then a copy held to the same shape: at most five top-level steps and one `Article URL:` line. A reply with no support article fails the run.
